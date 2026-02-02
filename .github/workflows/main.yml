@@ -2,20 +2,24 @@ name: Polymarket AI Scout
 on:
   schedule:
     - cron: '0 */4 * * *' # Běží každé 4 hodiny
-  workflow_dispatch: # Umožňuje spustit ručně tlačítkem
+  workflow_dispatch: # Tlačítko pro ruční spuštění
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - sudo apt-get update
-      - name: Setup Python
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-      - run: pip install requests google-generativeai
-      - name: Run Scan
+
+      - name: Install dependencies
+        run: pip install requests google-generativeai
+
+      - name: Run Bot Script
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
