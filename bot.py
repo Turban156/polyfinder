@@ -1,6 +1,7 @@
 import os
 import requests
 import google.generativeai as genai
+import time  # Knihovna pro čekání (aby nás Google nebloknul)
 import json
 
 # Načtení klíčů
@@ -8,36 +9,26 @@ GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# Konfigurace AI - ZMĚNA MODELU NA GEMINI-PRO (stabilnější)
+# Nastavení AI (Flash je pro free tier ideální)
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-    model = genai.GenerativeModel('gemini-pro')
+    model = genai.GenerativeModel('gemini-1.5-flash')
 
 def get_polymarket_data():
     print("Stahuji data z Polymarketu...")
+    # Použijeme stabilnější API endpoint
     url = "https://clob.polymarket.com/sampling-simplified-markets"
     try:
         resp = requests.get(url)
         data = resp.json()
         
-        market_list = []
+        # Ošetření formátu dat (seznam vs slovník)
         if isinstance(data, list):
-            market_list = data
+            return data
         elif isinstance(data, dict):
-            if 'data' in data and isinstance(data['data'], list):
-                market_list = data['data']
-            else:
-                market_list = list(data.values())
-
-        print(f"Zpracováno {len(market_list)} trhů.")
-        
-        # DEBUG: Vypíšeme první trh, abychom viděli strukturu dat v logu
-        if len(market_list) > 0:
-            print("UKÁZKA DAT PRVNÍHO TRHU (pro kontrolu):")
-            print(json.dumps(market_list[0], indent=2))
-            
-        return market_list[:5] # Pro test vezmeme jen 5, ať neplýtváme limity
-        
+            # Někdy je to schované pod klíčem 'data' nebo 'markets'
+            return data.get('data', list(data.values()))
+        return []
     except Exception as e:
         print(f"Chyba při stahování: {e}")
         return []
@@ -57,55 +48,52 @@ def main():
         return
 
     markets = get_polymarket_data()
-    
-    if not markets:
-        print("Žádná data ke zpracování.")
-        return
+    print(f"Staženo {len(markets)} trhů. Vybírám top 5 k analýze...")
 
-    print("Začínám analýzu s Gemini...")
-    for m in markets:
+    # Zpracujeme jen prvních 5, ať to netrvá věčnost
+    for i, m in enumerate(markets[:5]):
         if not isinstance(m, dict):
             continue
 
-        # Zkusíme najít otázku pod různými názvy
-        question = m.get('question') or m.get('title') or m.get('slug') or 'Neznámý trh'
-        
-        # Zkusíme najít cenu (u simplified markets to bývá složitější)
-        # Často je to v poli 'outcomePrices' jako json string
-        raw_rewards = m.get('outcomePrices')
-        price = "Neznámá"
-        
-        if raw_rewards:
-            try:
-                # Někdy je to string, někdy list. Zkusíme vzít první cenu.
-                if isinstance(raw_rewards, list): 
-                    price = raw_rewards[0]
-                elif isinstance(raw_rewards, str):
-                    price = raw_rewards.split(",")[0].replace('"', '').replace('[', '')
-            except:
-                price = "Chyba ceny"
+        # 1. Získání názvu otázky (zkoušíme různé klíče)
+        question = m.get('question')
+        if not question:
+            # Fallback, kdyby se klíč jmenoval jinak
+            question = m.get('title', 'Neznámý trh')
 
-        print(f"Analyzuji: {question} (Cena: {price})")
+        # 2. Získání ceny (outcomePrices bývá složitý string)
+        raw_price = m.get('outcomePrices')
+        price = "0.50" # Výchozí hodnota
+        try:
+            if isinstance(raw_price, list):
+                price = raw_price[0] # Cena pro "ANO"
+            elif isinstance(raw_price, str):
+                # Polymarket vrací např: '["0.65", "0.35"]'
+                json_prices = json.loads(raw_price)
+                price = json_prices[0]
+        except:
+            price = m.get('lastTradePrice', 'Neznámá')
 
-        # Pokud stále neznáme název trhu, přeskočíme ho, ať neplýtváme AI
-        if question == 'Neznámý trh':
-            print("-> Přeskakuji (chybí název)")
-            continue
+        print(f"[{i+1}/5] Analyzuji: {question} (Cena: {price})")
 
-        prompt = f"Jsi investiční analytik. Trh: '{question}'. Aktuální cena za 'ANO': {price}. Je to zajímavá příležitost pro rok 2026? Odpověz stručně. Pokud je to dobrá šance, začni slovem TIP."
+        # 3. Analýza s pauzou pro Free Tier
+        prompt = f"Jsi trader. Trh: '{question}'. Cena za ANO: {price}. Je to v roce 2026 jasná příležitost? Odpověz 1 větou. Pokud je to super, začni slovem TIP."
         
         try:
             response = model.generate_content(prompt)
-            ai_opinion = response.text.strip()
+            text = response.text.strip()
+            print(f"   -> AI: {text}")
             
-            # Pošleme vše pro test, pokud to není chyba
-            print(f"AI říká: {ai_opinion[:50]}...")
-            if "TIP" in ai_opinion.upper() or "ANO" in ai_opinion.upper():
-                msg = f"💡 {question}\nCena: {price}\n{ai_opinion}"
-                send_tg(msg)
-                print("-> Odesláno na Telegram.")
+            # Pošleme na Telegram vše, co není "NIC", abyste viděl, že to funguje
+            if "NIC" not in text.upper():
+                send_tg(f"🤖 {question}\nCena: {price}\n{text}")
+            
         except Exception as e:
-            print(f"Chyba AI: {e}")
+            print(f"   -> Chyba AI: {e}")
+
+        # DŮLEŽITÉ: Čekáme 5 sekund před dalším dotazem (Free Tier ochrana)
+        print("   -> Čekám 5s (limit free verze)...")
+        time.sleep(5)
 
 if __name__ == "__main__":
     main()
