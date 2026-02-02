@@ -1,7 +1,6 @@
 import os
 import requests
 import google.generativeai as genai
-import time  # Knihovna pro čekání (aby nás Google nebloknul)
 import json
 
 # Načtení klíčů
@@ -9,91 +8,77 @@ GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# Nastavení AI (Flash je pro free tier ideální)
+# Nastavení AI
 if GEMINI_KEY:
-    genai.configure(api_key=GEMINI_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-
-def get_polymarket_data():
-    print("Stahuji data z Polymarketu...")
-    # Použijeme stabilnější API endpoint
-    url = "https://clob.polymarket.com/sampling-simplified-markets"
     try:
-        resp = requests.get(url)
-        data = resp.json()
-        
-        # Ošetření formátu dat (seznam vs slovník)
-        if isinstance(data, list):
-            return data
-        elif isinstance(data, dict):
-            # Někdy je to schované pod klíčem 'data' nebo 'markets'
-            return data.get('data', list(data.values()))
-        return []
+        genai.configure(api_key=GEMINI_KEY)
+        model = genai.GenerativeModel('gemini-1.5-flash')
     except Exception as e:
-        print(f"Chyba při stahování: {e}")
-        return []
+        print(f"CHYBA KONFIGURACE AI: {e}")
 
 def send_tg(message):
     if not TG_TOKEN or not TG_CHAT_ID:
+        print("!!! CHYBÍ TELEGRAM TOKENY !!!")
         return
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     try:
-        requests.post(url, json={"chat_id": TG_CHAT_ID, "text": message})
+        response = requests.post(url, json={"chat_id": TG_CHAT_ID, "text": message})
+        print(f"Telegram status: {response.status_code}")
     except Exception as e:
-        print(f"Chyba Telegramu: {e}")
+        print(f"Chyba odeslání na Telegram: {e}")
 
 def main():
-    if not GEMINI_KEY:
-        print("CHYBA: Chybí GEMINI_API_KEY!")
-        return
+    print("--- ZAČÍNÁM DIAGNOSTIKU ---")
+    
+    # 1. Test klíčů
+    if not GEMINI_KEY: print("CHYBA: Není GEMINI KEY")
+    else: print("Gemini Key: OK")
+    
+    if not TG_TOKEN: print("CHYBA: Není TG TOKEN")
+    else: print("Telegram Token: OK")
 
-    markets = get_polymarket_data()
-    print(f"Staženo {len(markets)} trhů. Vybírám top 5 k analýze...")
-
-    # Zpracujeme jen prvních 5, ať to netrvá věčnost
-    for i, m in enumerate(markets[:5]):
-        if not isinstance(m, dict):
-            continue
-
-        # 1. Získání názvu otázky (zkoušíme různé klíče)
-        question = m.get('question')
-        if not question:
-            # Fallback, kdyby se klíč jmenoval jinak
-            question = m.get('title', 'Neznámý trh')
-
-        # 2. Získání ceny (outcomePrices bývá složitý string)
-        raw_price = m.get('outcomePrices')
-        price = "0.50" # Výchozí hodnota
-        try:
-            if isinstance(raw_price, list):
-                price = raw_price[0] # Cena pro "ANO"
-            elif isinstance(raw_price, str):
-                # Polymarket vrací např: '["0.65", "0.35"]'
-                json_prices = json.loads(raw_price)
-                price = json_prices[0]
-        except:
-            price = m.get('lastTradePrice', 'Neznámá')
-
-        print(f"[{i+1}/5] Analyzuji: {question} (Cena: {price})")
-
-        # 3. Analýza s pauzou pro Free Tier
-        prompt = f"Jsi trader. Trh: '{question}'. Cena za ANO: {price}. Je to v roce 2026 jasná příležitost? Odpověz 1 větou. Pokud je to super, začni slovem TIP."
+    # 2. Stažení dat
+    print("Stahuji data z Polymarketu...")
+    url = "https://clob.polymarket.com/sampling-simplified-markets"
+    try:
+        resp = requests.get(url, timeout=10) # Timeout aby se to nezaseklo
+        print(f"Status kód: {resp.status_code}")
+        data = resp.json()
         
-        try:
-            response = model.generate_content(prompt)
-            text = response.text.strip()
-            print(f"   -> AI: {text}")
+        # Výpis surových dat pro kontrolu (jen kousek)
+        print(f"Typ dat: {type(data)}")
+        
+        market_list = []
+        if isinstance(data, list):
+            market_list = data
+        elif isinstance(data, dict):
+            market_list = data.get('data', list(data.values()))
             
-            # Pošleme na Telegram vše, co není "NIC", abyste viděl, že to funguje
-            if "NIC" not in text.upper():
-                send_tg(f"🤖 {question}\nCena: {price}\n{text}")
-            
-        except Exception as e:
-            print(f"   -> Chyba AI: {e}")
+        print(f"Našel jsem {len(market_list)} trhů.")
+        
+        if len(market_list) == 0:
+            print("!!! ŽÁDNÉ TRHY K ANALÝZE !!!")
+            return
 
-        # DŮLEŽITÉ: Čekáme 5 sekund před dalším dotazem (Free Tier ochrana)
-        print("   -> Čekám 5s (limit free verze)...")
-        time.sleep(5)
+        # 3. Analýza JEDNOHO trhu (pro test)
+        m = market_list[0]
+        print("--- DATA PRVNÍHO TRHU ---")
+        print(json.dumps(m, indent=2)) # Vypíše přesnou strukturu
+        
+        question = m.get('question') or m.get('title') or 'Neznámý'
+        print(f"Otázka: {question}")
+        
+        # Test AI
+        print("Posílám dotaz na Gemini...")
+        response = model.generate_content(f"Napiš jen slovo: FUNGUJU. Trh: {question}")
+        print(f"Odpověď AI: {response.text}")
+        
+        # Test Telegramu
+        send_tg(f"🛠 TEST BOTA: {question}\nAI: {response.text}")
+        print("--- KONEC DIAGNOSTIKY ---")
+
+    except Exception as e:
+        print(f"!!! KRITICKÁ CHYBA V PROCESU: {e}")
 
 if __name__ == "__main__":
     main()
