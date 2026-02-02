@@ -3,9 +3,9 @@ import requests
 import google.generativeai as genai
 
 # TADY NIC NEMĚŇ - kód si klíče sám vytáhne z GitHubu
-GEMINI_KEY = os.getenv("AIzaSyBaQdL5uqhG8AbSajErQSee761ronWrH9w")
-TG_TOKEN = os.getenv(AAEB09UfkqpneRYTROPYXxS89xWHnl4ImR8)
-TG_CHAT_ID = os.getenv(5612770761)
+GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 genai.configure(api_key=GEMINI_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
