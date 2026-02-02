@@ -3,9 +3,9 @@ import requests
 import google.generativeai as genai
 
 # Konfigurace z GitHub Secrets
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+GEMINI_KEY = os.getenv(AIzaSyBaQdL5uqhG8AbSajErQSee761ronWrH9w)
+TG_TOKEN = os.getenv(8044397219:AAEB09UfkqpneRYTROPYXxS89xWHnl4ImR8)
+TG_CHAT_ID = os.getenv(5612770761)
 
 genai.configure(api_key=GEMINI_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
