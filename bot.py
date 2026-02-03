@@ -17,13 +17,13 @@ def send_tg(message):
     except Exception as e:
         print(f"Chyba Telegramu: {e}")
 
-# Funkce pro volání Gemini PŘÍMO (bez knihovny)
+# Funkce pro volání Gemini - POUŽIJEME MODEL "GEMINI-PRO" (Nejspolehlivější)
 def ask_gemini_direct(prompt):
     if not GEMINI_KEY:
         return "Chybí Gemini Key"
     
-    # Použijeme model Flash (je zdarma a rychlý)
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+    # Změna: Používáme 'gemini-pro', ten funguje na v1beta nejlépe
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_KEY}"
     headers = {'Content-Type': 'application/json'}
     data = {
         "contents": [{
@@ -33,18 +33,19 @@ def ask_gemini_direct(prompt):
     
     try:
         response = requests.post(url, headers=headers, json=data)
+        
+        # Pokud je chyba, vypíšeme ji, ale nezhroutíme se
         if response.status_code != 200:
-            return f"Chyba API: {response.text}"
+            print(f"API Error: {response.text}")
+            return "AI momentálně nedostupná."
             
         result = response.json()
-        # Vytáhneme text z JSON odpovědi
         return result['candidates'][0]['content']['parts'][0]['text']
     except Exception as e:
-        return f"Chyba komunikace s AI: {e}"
+        return f"Chyba komunikace: {e}"
 
 def get_gamma_data():
     print("Stahuji data z Polymarket Gamma API...")
-    # Seřadíme podle objemu peněz (volume), ať máme ty nejpopulárnější
     url = "https://gamma-api.polymarket.com/events?limit=5&active=true&closed=false&sort=volume"
     try:
         resp = requests.get(url, timeout=10)
@@ -54,7 +55,7 @@ def get_gamma_data():
         return []
 
 def main():
-    print("--- START BOTA (DIRECT API VERZE) ---")
+    print("--- START BOTA (VERZE GEMINI-PRO) ---")
     
     events = get_gamma_data()
     print(f"Staženo {len(events)} událostí.")
@@ -68,29 +69,36 @@ def main():
         try:
             title = event.get('title', 'Bez názvu')
             
-            # Hledání ceny (vylepšené)
+            # --- OPRAVENÉ ČTENÍ CENY ---
             markets = event.get('markets', [])
-            if not markets:
-                continue
+            price_yes = "0.50" # Výchozí hodnota
             
-            main_market = markets[0]
-            raw_prices = main_market.get('outcomePrices')
-            
-            # Gamma vrací ceny jako list stringů ["0.65", "0.35"]
-            price_yes = "Neznámá"
-            if raw_prices and isinstance(raw_prices, list) and len(raw_prices) > 0:
-                price_yes = str(round(float(raw_prices[0]), 2))
-            
+            if markets:
+                main_market = markets[0]
+                raw_prices = main_market.get('outcomePrices')
+                
+                # Polymarket někdy posílá ceny jako string '["0.6", "0.4"]' a někdy jako list
+                try:
+                    if isinstance(raw_prices, str):
+                        parsed_prices = json.loads(raw_prices)
+                        price_yes = str(round(float(parsed_prices[0]), 2))
+                    elif isinstance(raw_prices, list):
+                        price_yes = str(round(float(raw_prices[0]), 2))
+                except:
+                    price_yes = "Neznámá (Odhad 0.50)"
+
             print(f"[{i+1}] {title} (Cena: {price_yes})")
 
-            # Analýza AI (přímo)
-            prompt = f"Jsi expert na sázky. Trh: '{title}'. Cena za ANO je {price_yes}. Je to podle tebe výhodná sázka? Odpověz česky, maximálně 2 věty."
+            # Analýza AI
+            prompt = (f"Jsi sázkařský analytik. Trh: '{title}'. Aktuální cena za 'ANO' je {price_yes} "
+                      f"(to znamená pravděpodobnost {float(price_yes)*100 if '0.' in price_yes else 50}%). "
+                      f"Je to dobrá příležitost? Odpověz stručně česky jednou větou.")
             
             ai_text = ask_gemini_direct(prompt)
             print(f"   AI: {ai_text}")
 
             # Odeslání
-            msg = f"📊 *{title}*\n💰 Cena ANO: {price_yes}\n🤖 AI: {ai_text}"
+            msg = f"📊 *{title}*\n💰 Cena: {price_yes}\n🧠 {ai_text}"
             send_tg(msg)
             
             print("   Odesláno. Čekám 3s...")
