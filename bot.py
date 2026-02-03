@@ -2,12 +2,16 @@ import os
 import requests
 import json
 import time
+import sys
 
-# Načtení klíčů
+# Aby se výpisy v logu objevovaly okamžitě (nečekaly v bufferu)
+sys.stdout.reconfigure(line_buffering=True)
+
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+# Zůstáváme u KVALITY
 MODEL_NAME = "models/gemini-2.5-flash"
 
 def send_tg(message):
@@ -18,43 +22,46 @@ def send_tg(message):
     except Exception as e:
         print(f"Chyba Telegramu: {e}")
 
-# TOTO JE TA HLAVNÍ ZMĚNA - Funkce, která se nevzdává
-def ask_gemini_with_retry(prompt):
+def ask_gemini_patient(prompt):
     if not GEMINI_KEY: return "Chybí klíč."
     
     url = f"https://generativelanguage.googleapis.com/v1beta/{MODEL_NAME}:generateContent?key={GEMINI_KEY}"
     headers = {'Content-Type': 'application/json'}
     data = {"contents": [{"parts": [{"text": prompt}]}]}
     
-    # Zkusíme to až 3x
-    for attempt in range(3):
+    # Zkusíme to až 5x (Maximální trpělivost)
+    max_retries = 5
+    
+    for attempt in range(1, max_retries + 1):
         try:
-            print(f"   Volám AI (pokus {attempt+1}/3)...")
+            print(f"   🤖 Volám AI (pokus {attempt}/{max_retries})...")
             response = requests.post(url, headers=headers, json=data)
             
-            # KDYŽ NÁS GOOGLE STOPNE (Chyba 429)
+            # KDYŽ NÁS GOOGLE STOPNE (LIMIT)
             if response.status_code == 429 or response.status_code == 403:
-                print("   ⚠️ NARAZIL JSEM NA LIMIT. Čekám 65 sekund a zkusím to znova...")
-                time.sleep(65) # Počkáme minutu a kousek
-                continue # A jedeme znova smyčku
+                wait_time = 120 # Tvrdá pauza 2 minuty
+                print(f"   ☕️ Google je přetížen. Dávám si velkou pauzu ({wait_time}s)...")
+                time.sleep(wait_time)
+                continue # Zkusíme to znova
                 
             if response.status_code != 200:
-                return f"Chyba AI {response.status_code}"
+                print(f"   Chyba API: {response.status_code}")
+                time.sleep(5)
+                continue
             
-            # KDYŽ TO KLAPNE
+            # ÚSPĚCH
             result = response.json()
             if 'candidates' in result and result['candidates']:
                 return result['candidates'][0]['content']['parts'][0]['text']
-            else:
-                return "AI nemá názor."
-                
-        except Exception as e:
-            return f"Chyba spojení: {e}"
             
-    return "Bohužel, Google je dnes přetížený (ani po 3 pokusech to nešlo)."
+        except Exception as e:
+            print(f"   Chyba spojení: {e}")
+            time.sleep(10)
+            
+    return "Omlouvám se, Google dnes opravdu stávkuje (ani 5 pokusů nestačilo)."
 
 def get_gamma_data():
-    print("Stahuji data...")
+    print("Stahuji data z Polymarketu...")
     url = "https://gamma-api.polymarket.com/events?limit=5&active=true&closed=false&sort=volume"
     try:
         resp = requests.get(url, timeout=10)
@@ -64,10 +71,10 @@ def get_gamma_data():
         return []
 
 def main():
-    print("--- START BOTA (AUTO-RETRY VERZE) ---")
+    print("--- START BOTA (ZEN MASTER VERZE) ---")
     
-    # Bezpečnostní pauza na začátku, kdybyste to spustil moc brzy po sobě
-    print("Zahřívací pauza 10s...")
+    # Bezpečnostní start
+    print("Zahřívám motory (10s pauza)...")
     time.sleep(10)
 
     events = get_gamma_data()
@@ -100,27 +107,27 @@ def main():
 
             print(f"[{i+1}] {title} (Cena: {price_txt})")
 
-            # Výběr promptu
             if is_complex:
-                prompt = (f"Jsi zkušený analytik. Trh: '{title}'. "
-                          f"Toto je složitá sázka. Napiš krátkou, vtipnou predikci, jak to dopadne. "
-                          f"Max 2 věty.")
+                # Expert prompt pro 2.5 Flash
+                prompt = (f"Jsi špičkový krypto-analytik. Trh: '{title}'. "
+                          f"Napiš k tomu jednu chytrou, analytickou a mírně vtipnou větu. "
+                          f"Zapoj své znalosti o situaci.")
                 icon = "🧠"
             else:
                 prompt = (f"Trh: '{title}'. Šance na ANO je {price_txt}. "
                           f"Napiš k tomu jednu vtipnou glosu.")
                 icon = "💰"
 
-            # TADY VOLÁME NOVOU FUNKCI S OPAKOVÁNÍM
-            ai_text = ask_gemini_with_retry(prompt)
+            # Volání s trpělivostí
+            ai_text = ask_gemini_patient(prompt)
             print(f"   AI: {ai_text}")
 
             msg = f"{icon} *{title}*\n📊 Stav: {price_txt}\n💬 {ai_text}"
             send_tg(msg)
             
-            # I když to prošlo, dáme si pauzu pro jistotu
-            print("   Úspěch. Pauza 20s před dalším...")
-            time.sleep(20)
+            # Pauza mezi zprávami (i když to prošlo)
+            print("   Odesláno. Odpočívám 60s...")
+            time.sleep(60)
 
         except Exception as e:
             print(f"   Chyba: {e}")
