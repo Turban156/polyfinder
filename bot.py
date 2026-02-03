@@ -17,40 +17,66 @@ def send_tg(message):
     except Exception as e:
         print(f"Chyba Telegramu: {e}")
 
-# Funkce pro volání Gemini - VERZE V1 (STABILNÍ) + FLASH MODEL
-def ask_gemini_direct(prompt):
+# 1. KROK: ZJISTIT, JAKÝ MODEL FUNGUJE
+def get_best_model():
     if not GEMINI_KEY:
-        return "Chybí Gemini Key"
+        print("Chybí API klíč!")
+        return None
+
+    print("🔍 Hledám dostupný AI model...")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_KEY}"
     
-    # ZMĚNA: Používáme stabilní verzi 'v1' a model 'gemini-1.5-flash'
-    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+    try:
+        resp = requests.get(url)
+        if resp.status_code != 200:
+            print(f"Chyba při hledání modelů: {resp.text}")
+            return "models/gemini-pro" # Fallback
+
+        data = resp.json()
+        # Projdeme seznam a najdeme první, co umí generovat text
+        for m in data.get('models', []):
+            name = m.get('name')
+            methods = m.get('supportedGenerationMethods', [])
+            if 'generateContent' in methods and 'gemini' in name:
+                print(f"✅ Nalezen funkční model: {name}")
+                return name
+                
+    except Exception as e:
+        print(f"Chyba připojení k Google: {e}")
+    
+    return "models/gemini-1.5-flash" # Poslední záchrana
+
+# Uložíme si název modelu do proměnné
+CURRENT_MODEL = None 
+
+def ask_gemini_auto(prompt):
+    global CURRENT_MODEL
+    if not CURRENT_MODEL:
+        CURRENT_MODEL = get_best_model()
+    
+    if not CURRENT_MODEL:
+        return "AI není k dispozici."
+
+    # Voláme API s automaticky nalezeným modelem
+    url = f"https://generativelanguage.googleapis.com/v1beta/{CURRENT_MODEL}:generateContent?key={GEMINI_KEY}"
     headers = {'Content-Type': 'application/json'}
-    data = {
-        "contents": [{
-            "parts": [{"text": prompt}]
-        }]
-    }
+    data = {"contents": [{"parts": [{"text": prompt}]}]}
     
     try:
         response = requests.post(url, headers=headers, json=data)
-        
         if response.status_code != 200:
-            # Vypíše přesnou chybu, pokud nastane
-            return f"Error {response.status_code}: {response.text}"
+            return f"Error {response.status_code}"
             
         result = response.json()
-        # Bezpečné vytažení textu
         if 'candidates' in result and result['candidates']:
             return result['candidates'][0]['content']['parts'][0]['text']
         else:
-            return "AI neodpověděla (prázdná data)."
-            
+            return "Prázdná odpověď."
     except Exception as e:
-        return f"Chyba komunikace: {e}"
+        return f"Chyba: {e}"
 
 def get_gamma_data():
     print("Stahuji data z Polymarket Gamma API...")
-    # Seřadíme podle objemu, ať máme top trhy
     url = "https://gamma-api.polymarket.com/events?limit=5&active=true&closed=false&sort=volume"
     try:
         resp = requests.get(url, timeout=10)
@@ -59,22 +85,12 @@ def get_gamma_data():
         print(f"Chyba stahování: {e}")
         return []
 
-def parse_price(raw_prices):
-    # Funkce, která vytáhne cenu ať je v jakémkoliv formátu
-    try:
-        # Někdy je to list ["0.55", "0.45"], někdy string
-        if isinstance(raw_prices, str):
-            raw_prices = json.loads(raw_prices)
-        
-        if isinstance(raw_prices, list) and len(raw_prices) > 0:
-            val = float(raw_prices[0])
-            return str(round(val, 2))
-    except:
-        pass
-    return "0.50" # Fallback
-
 def main():
-    print("--- START BOTA (FINAL FLASH VERZE) ---")
+    print("--- START BOTA (AUTO-DETECT) ---")
+    
+    # Nejdřív najdeme model (aby to nezdržovalo v cyklu)
+    global CURRENT_MODEL
+    CURRENT_MODEL = get_best_model()
     
     events = get_gamma_data()
     print(f"Staženo {len(events)} událostí.")
@@ -83,41 +99,44 @@ def main():
         print("Žádná data.")
         return
 
-    # Zpracujeme první 3 trhy
     for i, event in enumerate(events[:3]):
         try:
             title = event.get('title', 'Bez názvu')
-            
-            # Získání ceny
             markets = event.get('markets', [])
-            price = "Neznámá"
+            
+            price_display = "Neznámá"
             
             if markets:
-                main_market = markets[0] # Hlavní trh události
-                price = parse_price(main_market.get('outcomePrices'))
-            
-            print(f"[{i+1}] {title} (Cena: {price})")
+                # DEBUG: Vypíšeme surová data ceny, abychom viděli, proč je to 0.0
+                raw = markets[0].get('outcomePrices')
+                print(f"   DEBUG CENA pro '{title}': {raw}")
+                
+                try:
+                    # Zkusíme to rozparsovat
+                    if isinstance(raw, str): raw = json.loads(raw)
+                    if isinstance(raw, list) and len(raw) > 0:
+                        val = float(raw[0])
+                        price_display = str(round(val, 2))
+                except:
+                    price_display = "Chyba čtení"
 
-            # Analýza AI
-            prompt = (f"Jsi zkušený trader. Trh: '{title}'. Cena za výsledek ANO je {price} "
-                      f"(tedy šance {float(price)*100}%). "
-                      f"Je to dobrá sázka? Odpověz česky, stručně, max 2 věty. Buď konkrétní.")
+            print(f"[{i+1}] {title} (Cena: {price_display})")
+
+            # Dotaz na AI
+            prompt = (f"Jsi analytik. Trh: '{title}'. Cena ANO je {price_display}. "
+                      f"Napiš k tomu 1 krátkou vtipnou větu.")
             
-            ai_text = ask_gemini_direct(prompt)
-            
-            # Oříznutí textu, kdyby byl moc dlouhý
-            ai_text = ai_text[:400]
+            ai_text = ask_gemini_auto(prompt)
             print(f"   AI: {ai_text}")
 
-            # Odeslání na Telegram
-            msg = f"🔥 *{title}*\n💵 Cena: {price}\n🤖 {ai_text}"
+            # Odeslání
+            msg = f"🤖 *{title}*\nCena: {price_display}\n💬 {ai_text}"
             send_tg(msg)
             
-            print("   Odesláno. Pauza 3s...")
             time.sleep(3)
 
         except Exception as e:
-            print(f"   Chyba cyklu: {e}")
+            print(f"   Chyba: {e}")
 
 if __name__ == "__main__":
     main()
