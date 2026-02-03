@@ -4,10 +4,11 @@ import json
 import time
 import sys
 
-# Vynucení okamžitého výpisu do logu
+# Abychom viděli výpisy hned
 sys.stdout.reconfigure(line_buffering=True)
 
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+# Načtení klíčů
+OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -19,56 +20,35 @@ def send_tg(message):
     except Exception as e:
         print(f"Chyba Telegramu: {e}")
 
-# OPRAVENÁ HYBRIDNÍ FUNKCE
-def ask_gemini_hybrid(prompt):
-    if not GEMINI_KEY: return "Chybí klíč."
+# Funkce pro volání OpenAI (GPT-4o)
+def ask_openai(prompt):
+    if not OPENAI_KEY:
+        return "Chybí OpenAI API klíč."
     
-    # DEFINICE MODELŮ A JEJICH ADRES
-    # 1. Priorita: Gemini 2.5 (Super chytrý) - je na adrese v1beta
-    # 2. Záloha: Gemini 1.5 Flash (Spolehlivý) - je na adrese v1 (STABILNÍ)
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {OPENAI_KEY}"
+    }
     
-    configs = [
-        {
-            "name": "Gemini 2.5 Flash (Beta)",
-            "url": f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_KEY}"
-        },
-        {
-            "name": "Gemini 1.5 Flash (Stable)",
-            "url": f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
-        }
-    ]
+    # Nastavení modelu - gpt-4o je špička, gpt-4o-mini je levnější
+    data = {
+        "model": "gpt-4o", 
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.7
+    }
     
-    for config in configs:
-        model_name = config["name"]
-        url = config["url"]
+    try:
+        response = requests.post(url, headers=headers, json=data)
         
-        print(f"   🤖 Zkouším: {model_name} ...")
-        headers = {'Content-Type': 'application/json'}
-        data = {"contents": [{"parts": [{"text": prompt}]}]}
+        if response.status_code != 200:
+            return f"Chyba OpenAI {response.status_code}: {response.text}"
+            
+        result = response.json()
+        return result['choices'][0]['message']['content']
         
-        try:
-            response = requests.post(url, headers=headers, json=data)
-            
-            # KDYŽ JE MODEL PŘETÍŽENÝ (Limit)
-            if response.status_code == 429 or response.status_code == 403:
-                print(f"   ⚠️ {model_name} je přetížen. Jdu na další...")
-                time.sleep(1) 
-                continue # Další v seznamu
-            
-            # KDYŽ MODEL NEEXISTUJE NEBO JINÁ CHYBA
-            if response.status_code != 200:
-                print(f"   Chyba {response.status_code} u {model_name}: {response.text}")
-                continue # Další v seznamu
-
-            # ÚSPĚCH
-            result = response.json()
-            if 'candidates' in result and result['candidates']:
-                return result['candidates'][0]['content']['parts'][0]['text']
-            
-        except Exception as e:
-            print(f"   Chyba spojení: {e}")
-            
-    return "Všechny modely selhaly (Google je dnes mimo provoz)."
+    except Exception as e:
+        return f"Chyba komunikace: {e}"
 
 def get_gamma_data():
     print("Stahuji data z Polymarketu...")
@@ -81,7 +61,7 @@ def get_gamma_data():
         return []
 
 def main():
-    print("--- START BOTA (OPRAVENÝ HYBRID) ---")
+    print("--- START BOTA (OPENAI GPT-4o) ---")
     
     events = get_gamma_data()
     if not events:
@@ -115,23 +95,25 @@ def main():
 
             # Výběr promptu
             if is_complex:
-                prompt = (f"Jsi expert. Trh: '{title}'. "
-                          f"Toto je složitá sázka. Napiš krátkou, chytrou predikci (1-2 věty).")
+                prompt = (f"Jsi expert na predikční trhy. Trh: '{title}'. "
+                          f"Toto je složitá sázka (ne jen Ano/Ne). "
+                          f"Napiš krátkou (max 2 věty), chytrou a vtipnou analýzu, jak to asi dopadne.")
                 icon = "🧠"
             else:
-                prompt = (f"Trh: '{title}'. Šance na ANO je {price_txt}. "
-                          f"Napiš k tomu jednu vtipnou glosu.")
+                prompt = (f"Trh: '{title}'. Pravděpodobnost 'ANO' je {price_txt}. "
+                          f"Napiš k tomu jednu kousavou nebo vtipnou glosu.")
                 icon = "💰"
 
-            # VOLÁNÍ OPRAVENÉ FUNKCE
-            ai_text = ask_gemini_hybrid(prompt)
-            print(f"   AI: {ai_text}")
+            # Volání OpenAI
+            ai_text = ask_openai(prompt)
+            print(f"   GPT-4o: {ai_text}")
 
             msg = f"{icon} *{title}*\n📊 Stav: {price_txt}\n💬 {ai_text}"
             send_tg(msg)
             
-            print("   Odesláno. Pauza 20s...")
-            time.sleep(20)
+            # U OpenAI stačí malá pauza, je rychlá
+            print("   Odesláno. Pauza 5s...")
+            time.sleep(5)
 
         except Exception as e:
             print(f"   Chyba: {e}")
