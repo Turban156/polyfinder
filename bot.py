@@ -4,7 +4,7 @@ import json
 import time
 import sys
 
-# Vynucení okamžitého výpisu do logu (aby nebylo ticho)
+# Vynucení okamžitého výpisu do logu
 sys.stdout.reconfigure(line_buffering=True)
 
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
@@ -19,35 +19,48 @@ def send_tg(message):
     except Exception as e:
         print(f"Chyba Telegramu: {e}")
 
-# Funkce, která zkouší různé modely
+# OPRAVENÁ HYBRIDNÍ FUNKCE
 def ask_gemini_hybrid(prompt):
     if not GEMINI_KEY: return "Chybí klíč."
     
-    # SEZNAM MODELŮ: První je ten nejlepší, druhý je "záchranný kruh"
-    models_to_try = [
-        "models/gemini-2.5-flash",  # Priorita 1: Super chytrý
-        "models/gemini-1.5-flash"   # Priorita 2: Spolehlivý držák
+    # DEFINICE MODELŮ A JEJICH ADRES
+    # 1. Priorita: Gemini 2.5 (Super chytrý) - je na adrese v1beta
+    # 2. Záloha: Gemini 1.5 Flash (Spolehlivý) - je na adrese v1 (STABILNÍ)
+    
+    configs = [
+        {
+            "name": "Gemini 2.5 Flash (Beta)",
+            "url": f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_KEY}"
+        },
+        {
+            "name": "Gemini 1.5 Flash (Stable)",
+            "url": f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+        }
     ]
     
-    for model in models_to_try:
-        print(f"   🤖 Zkouším model: {model} ...")
-        url = f"https://generativelanguage.googleapis.com/v1beta/{model}:generateContent?key={GEMINI_KEY}"
+    for config in configs:
+        model_name = config["name"]
+        url = config["url"]
+        
+        print(f"   🤖 Zkouším: {model_name} ...")
         headers = {'Content-Type': 'application/json'}
         data = {"contents": [{"parts": [{"text": prompt}]}]}
         
         try:
             response = requests.post(url, headers=headers, json=data)
             
-            # Pokud narazíme na limit (429/403), jdeme hned na další model
+            # KDYŽ JE MODEL PŘETÍŽENÝ (Limit)
             if response.status_code == 429 or response.status_code == 403:
-                print(f"   ⚠️ Model {model} je přetížen (Limit). Přepínám na záložní...")
-                time.sleep(2) # Krátký nádech
-                continue # Jdeme na další model v seznamu
+                print(f"   ⚠️ {model_name} je přetížen. Jdu na další...")
+                time.sleep(1) 
+                continue # Další v seznamu
             
+            # KDYŽ MODEL NEEXISTUJE NEBO JINÁ CHYBA
             if response.status_code != 200:
-                print(f"   Chyba {response.status_code}: {response.text}")
-                continue
+                print(f"   Chyba {response.status_code} u {model_name}: {response.text}")
+                continue # Další v seznamu
 
+            # ÚSPĚCH
             result = response.json()
             if 'candidates' in result and result['candidates']:
                 return result['candidates'][0]['content']['parts'][0]['text']
@@ -55,7 +68,7 @@ def ask_gemini_hybrid(prompt):
         except Exception as e:
             print(f"   Chyba spojení: {e}")
             
-    return "Dnes to nejde. Google stávkuje u všech modelů."
+    return "Všechny modely selhaly (Google je dnes mimo provoz)."
 
 def get_gamma_data():
     print("Stahuji data z Polymarketu...")
@@ -68,7 +81,7 @@ def get_gamma_data():
         return []
 
 def main():
-    print("--- START BOTA (HYBRIDNÍ VERZE) ---")
+    print("--- START BOTA (OPRAVENÝ HYBRID) ---")
     
     events = get_gamma_data()
     if not events:
@@ -103,21 +116,20 @@ def main():
             # Výběr promptu
             if is_complex:
                 prompt = (f"Jsi expert. Trh: '{title}'. "
-                          f"Toto je složitá sázka. Napiš krátkou, vtipnou predikci. Max 2 věty.")
+                          f"Toto je složitá sázka. Napiš krátkou, chytrou predikci (1-2 věty).")
                 icon = "🧠"
             else:
                 prompt = (f"Trh: '{title}'. Šance na ANO je {price_txt}. "
                           f"Napiš k tomu jednu vtipnou glosu.")
                 icon = "💰"
 
-            # VOLÁNÍ HYBRIDNÍ FUNKCE
+            # VOLÁNÍ OPRAVENÉ FUNKCE
             ai_text = ask_gemini_hybrid(prompt)
             print(f"   AI: {ai_text}")
 
             msg = f"{icon} *{title}*\n📊 Stav: {price_txt}\n💬 {ai_text}"
             send_tg(msg)
             
-            # Pauza 20s stačí, když máme záložní model
             print("   Odesláno. Pauza 20s...")
             time.sleep(20)
 
