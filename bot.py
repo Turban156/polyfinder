@@ -20,7 +20,6 @@ def send_tg(message):
     except Exception as e:
         print(f"Chyba Telegramu: {e}")
 
-# Funkce pro volání OpenAI (GPT-4o)
 def ask_openai(prompt):
     if not OPENAI_KEY:
         return "Chybí OpenAI API klíč."
@@ -31,22 +30,22 @@ def ask_openai(prompt):
         "Authorization": f"Bearer {OPENAI_KEY}"
     }
     
-    # Nastavení modelu - gpt-4o je špička, gpt-4o-mini je levnější
     data = {
         "model": "gpt-4o", 
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.7
+        "messages": [
+            # Tady nastavujeme "osobnost" bota
+            {"role": "system", "content": "Jsi zkušený a pragmatický trader na predikčních trzích (Polymarket). Tvá práce je hledat alpha (výhodné příležitosti). Mluv stručně, jasně a analyticky. Žádné vtipy, jen fakta a doporučení."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.5 # Menší náhoda = více analytické
     }
     
     try:
         response = requests.post(url, headers=headers, json=data)
-        
         if response.status_code != 200:
-            return f"Chyba OpenAI {response.status_code}: {response.text}"
-            
+            return f"Chyba OpenAI {response.status_code}"
         result = response.json()
         return result['choices'][0]['message']['content']
-        
     except Exception as e:
         return f"Chyba komunikace: {e}"
 
@@ -61,14 +60,13 @@ def get_gamma_data():
         return []
 
 def main():
-    print("--- START BOTA (OPENAI GPT-4o) ---")
+    print("--- START BOTA (ANALYTIK MODE) ---")
     
     events = get_gamma_data()
     if not events:
         print("Žádná data.")
         return
 
-    # Zpracujeme 3 události
     for i, event in enumerate(events[:3]):
         try:
             title = event.get('title', 'Bez názvu')
@@ -93,26 +91,25 @@ def main():
 
             print(f"[{i+1}] {title} (Cena: {price_txt})")
 
-            # Výběr promptu
+            # --- ZMĚNA PROMPTU NA ANALYTICKÝ ---
             if is_complex:
-                prompt = (f"Jsi expert na predikční trhy. Trh: '{title}'. "
-                          f"Toto je složitá sázka (ne jen Ano/Ne). "
-                          f"Napiš krátkou (max 2 věty), chytrou a vtipnou analýzu, jak to asi dopadne.")
+                prompt = (f"Analyzuj trh: '{title}'. Jde o složitou sázku s více možnostmi. "
+                          f"Na základě aktuálního dění ve světě (crypto/politika), jaký výsledek je nejpravděpodobnější? "
+                          f"Napiš stručnou analýzu a na závěr dej jasný tip, na co vsadit.")
                 icon = "🧠"
             else:
-                prompt = (f"Trh: '{title}'. Pravděpodobnost 'ANO' je {price_txt}. "
-                          f"Napiš k tomu jednu kousavou nebo vtipnou glosu.")
-                icon = "💰"
+                prompt = (f"Analyzuj trh: '{title}'. Aktuální cena za výsledek 'ANO' je {price_txt}. "
+                          f"Je tato cena férová, podhodnocená nebo nadhodnocená? "
+                          f"Vyplatí se do toho jít? Odpověz stručně (max 2 věty) a na konec dej VERDIKT: "
+                          f"[KOUPIT ANO] nebo [KOUPIT NE] nebo [NEVSAZET].")
+                icon = "📈"
 
-            # Volání OpenAI
             ai_text = ask_openai(prompt)
-            print(f"   GPT-4o: {ai_text}")
+            print(f"   Analýza: {ai_text}")
 
-            msg = f"{icon} *{title}*\n📊 Stav: {price_txt}\n💬 {ai_text}"
+            msg = f"{icon} *{title}*\n💵 Cena: {price_txt}\n📝 {ai_text}"
             send_tg(msg)
             
-            # U OpenAI stačí malá pauza, je rychlá
-            print("   Odesláno. Pauza 5s...")
             time.sleep(5)
 
         except Exception as e:
