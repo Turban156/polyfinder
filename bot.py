@@ -4,15 +4,12 @@ import json
 import time
 import sys
 
-# Aby se výpisy v logu objevovaly okamžitě (nečekaly v bufferu)
+# Vynucení okamžitého výpisu do logu (aby nebylo ticho)
 sys.stdout.reconfigure(line_buffering=True)
 
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-
-# Zůstáváme u KVALITY
-MODEL_NAME = "models/gemini-2.5-flash"
 
 def send_tg(message):
     if not TG_TOKEN or not TG_CHAT_ID: return
@@ -22,43 +19,43 @@ def send_tg(message):
     except Exception as e:
         print(f"Chyba Telegramu: {e}")
 
-def ask_gemini_patient(prompt):
+# Funkce, která zkouší různé modely
+def ask_gemini_hybrid(prompt):
     if not GEMINI_KEY: return "Chybí klíč."
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/{MODEL_NAME}:generateContent?key={GEMINI_KEY}"
-    headers = {'Content-Type': 'application/json'}
-    data = {"contents": [{"parts": [{"text": prompt}]}]}
+    # SEZNAM MODELŮ: První je ten nejlepší, druhý je "záchranný kruh"
+    models_to_try = [
+        "models/gemini-2.5-flash",  # Priorita 1: Super chytrý
+        "models/gemini-1.5-flash"   # Priorita 2: Spolehlivý držák
+    ]
     
-    # Zkusíme to až 5x (Maximální trpělivost)
-    max_retries = 5
-    
-    for attempt in range(1, max_retries + 1):
+    for model in models_to_try:
+        print(f"   🤖 Zkouším model: {model} ...")
+        url = f"https://generativelanguage.googleapis.com/v1beta/{model}:generateContent?key={GEMINI_KEY}"
+        headers = {'Content-Type': 'application/json'}
+        data = {"contents": [{"parts": [{"text": prompt}]}]}
+        
         try:
-            print(f"   🤖 Volám AI (pokus {attempt}/{max_retries})...")
             response = requests.post(url, headers=headers, json=data)
             
-            # KDYŽ NÁS GOOGLE STOPNE (LIMIT)
+            # Pokud narazíme na limit (429/403), jdeme hned na další model
             if response.status_code == 429 or response.status_code == 403:
-                wait_time = 120 # Tvrdá pauza 2 minuty
-                print(f"   ☕️ Google je přetížen. Dávám si velkou pauzu ({wait_time}s)...")
-                time.sleep(wait_time)
-                continue # Zkusíme to znova
-                
-            if response.status_code != 200:
-                print(f"   Chyba API: {response.status_code}")
-                time.sleep(5)
-                continue
+                print(f"   ⚠️ Model {model} je přetížen (Limit). Přepínám na záložní...")
+                time.sleep(2) # Krátký nádech
+                continue # Jdeme na další model v seznamu
             
-            # ÚSPĚCH
+            if response.status_code != 200:
+                print(f"   Chyba {response.status_code}: {response.text}")
+                continue
+
             result = response.json()
             if 'candidates' in result and result['candidates']:
                 return result['candidates'][0]['content']['parts'][0]['text']
             
         except Exception as e:
             print(f"   Chyba spojení: {e}")
-            time.sleep(10)
             
-    return "Omlouvám se, Google dnes opravdu stávkuje (ani 5 pokusů nestačilo)."
+    return "Dnes to nejde. Google stávkuje u všech modelů."
 
 def get_gamma_data():
     print("Stahuji data z Polymarketu...")
@@ -71,12 +68,8 @@ def get_gamma_data():
         return []
 
 def main():
-    print("--- START BOTA (ZEN MASTER VERZE) ---")
+    print("--- START BOTA (HYBRIDNÍ VERZE) ---")
     
-    # Bezpečnostní start
-    print("Zahřívám motory (10s pauza)...")
-    time.sleep(10)
-
     events = get_gamma_data()
     if not events:
         print("Žádná data.")
@@ -107,27 +100,26 @@ def main():
 
             print(f"[{i+1}] {title} (Cena: {price_txt})")
 
+            # Výběr promptu
             if is_complex:
-                # Expert prompt pro 2.5 Flash
-                prompt = (f"Jsi špičkový krypto-analytik. Trh: '{title}'. "
-                          f"Napiš k tomu jednu chytrou, analytickou a mírně vtipnou větu. "
-                          f"Zapoj své znalosti o situaci.")
+                prompt = (f"Jsi expert. Trh: '{title}'. "
+                          f"Toto je složitá sázka. Napiš krátkou, vtipnou predikci. Max 2 věty.")
                 icon = "🧠"
             else:
                 prompt = (f"Trh: '{title}'. Šance na ANO je {price_txt}. "
                           f"Napiš k tomu jednu vtipnou glosu.")
                 icon = "💰"
 
-            # Volání s trpělivostí
-            ai_text = ask_gemini_patient(prompt)
+            # VOLÁNÍ HYBRIDNÍ FUNKCE
+            ai_text = ask_gemini_hybrid(prompt)
             print(f"   AI: {ai_text}")
 
             msg = f"{icon} *{title}*\n📊 Stav: {price_txt}\n💬 {ai_text}"
             send_tg(msg)
             
-            # Pauza mezi zprávami (i když to prošlo)
-            print("   Odesláno. Odpočívám 60s...")
-            time.sleep(60)
+            # Pauza 20s stačí, když máme záložní model
+            print("   Odesláno. Pauza 20s...")
+            time.sleep(20)
 
         except Exception as e:
             print(f"   Chyba: {e}")
