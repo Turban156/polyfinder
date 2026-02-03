@@ -8,7 +8,7 @@ GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# POUŽIJEME VÁŠ OBJEVENÝ MODEL
+# Model, který víme, že funguje
 MODEL_NAME = "models/gemini-2.5-flash"
 
 def send_tg(message):
@@ -31,9 +31,10 @@ def ask_gemini(prompt):
     try:
         response = requests.post(url, headers=headers, json=data)
         
-        # Ošetření chyby 403 (Limity)
+        # Pokud jsme narazili na limit, vrátíme text, ale nezhroutíme se
         if response.status_code == 429 or response.status_code == 403:
-            return "Moc rychlé dotazy na AI (Limit)."
+            return "Limit vyčerpán (příště počkám déle)."
+            
         if response.status_code != 200:
             return f"Chyba AI {response.status_code}"
             
@@ -41,13 +42,12 @@ def ask_gemini(prompt):
         if 'candidates' in result and result['candidates']:
             return result['candidates'][0]['content']['parts'][0]['text']
         else:
-            return "Mlčící AI."
+            return "AI mlčí."
     except Exception as e:
         return f"Chyba spojení: {e}"
 
 def get_gamma_data():
     print("Stahuji data...")
-    # Řadíme podle objemu, ať jsou to ty nejžhavější
     url = "https://gamma-api.polymarket.com/events?limit=5&active=true&closed=false&sort=volume"
     try:
         resp = requests.get(url, timeout=10)
@@ -57,7 +57,7 @@ def get_gamma_data():
         return []
 
 def main():
-    print(f"--- START BOTA ({MODEL_NAME}) ---")
+    print("--- START BOTA (30s PAUZA) ---")
     
     events = get_gamma_data()
     print(f"Staženo {len(events)} událostí.")
@@ -66,40 +66,46 @@ def main():
         print("Žádná data.")
         return
 
-    # Projdeme první 3 události
+    # Zpracujeme 3 události
     for i, event in enumerate(events[:3]):
         try:
             title = event.get('title', 'Bez názvu')
             
-            # Zkusíme najít cenu, pokud je 0, napíšeme Info
+            # --- VYLEPŠENÉ ČTENÍ CENY ---
             markets = event.get('markets', [])
-            price_txt = "Neznámá"
+            price_txt = "Viz Polymarket" # Výchozí text
             
             if markets:
                 raw = markets[0].get('outcomePrices')
-                # Pokud je to ["0", "1"], tak to není cena, ale rozsah
-                if isinstance(raw, list) and len(raw) > 0:
-                    if raw[0] == "0" or raw[0] == "0.0":
-                        price_txt = "Viz Polymarket"
-                    else:
-                        price_txt = str(round(float(raw[0]), 2))
-            
+                # Zkusíme zjistit, jestli je to číslo nebo rozsah
+                try:
+                    if isinstance(raw, str): raw = json.loads(raw)
+                    if isinstance(raw, list) and len(raw) > 0:
+                        val = float(raw[0])
+                        # Pokud je cena 0 nebo 1 přesně, je to divné -> asi složitý trh
+                        if val > 0.01 and val < 0.99:
+                            price_txt = f"{int(val*100)} %"
+                        else:
+                            price_txt = "Složitý trh"
+                except:
+                    price_txt = "Neznámá"
+
             print(f"[{i+1}] {title} (Cena: {price_txt})")
 
             # Dotaz na AI
-            prompt = (f"Jsi vtipný glosátor trhu. Trh: '{title}'. "
-                      f"Napiš k tomu jednu kousavou nebo vtipnou větu česky.")
+            prompt = (f"Jsi vtipný glosátor. Trh: '{title}'. "
+                      f"Napiš k tomu jednu krátkou, údernou, vtipnou větu česky.")
             
             ai_text = ask_gemini(prompt)
             print(f"   AI: {ai_text}")
 
             # Odeslání
-            msg = f"🔔 *{title}*\n💰 Cena: {price_txt}\n💬 {ai_text}"
+            msg = f"🔔 *{title}*\n💰 Šance: {price_txt}\n💬 {ai_text}"
             send_tg(msg)
             
-            # DŮLEŽITÉ: Dlouhá pauza pro Free verzi modelu 2.5
-            print("   Pauza 12 sekund (kvůli limitům Google)...")
-            time.sleep(12)
+            # DŮLEŽITÉ: Dlouhá pauza 30 sekund
+            print("   Dávám si kafíčko (30s pauza)...")
+            time.sleep(30)
 
         except Exception as e:
             print(f"   Chyba: {e}")
