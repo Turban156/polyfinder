@@ -17,13 +17,13 @@ def send_tg(message):
     except Exception as e:
         print(f"Chyba Telegramu: {e}")
 
-# Funkce pro volání Gemini - POUŽIJEME MODEL "GEMINI-PRO" (Nejspolehlivější)
+# Funkce pro volání Gemini - VERZE V1 (STABILNÍ) + FLASH MODEL
 def ask_gemini_direct(prompt):
     if not GEMINI_KEY:
         return "Chybí Gemini Key"
     
-    # Změna: Používáme 'gemini-pro', ten funguje na v1beta nejlépe
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_KEY}"
+    # ZMĚNA: Používáme stabilní verzi 'v1' a model 'gemini-1.5-flash'
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
     headers = {'Content-Type': 'application/json'}
     data = {
         "contents": [{
@@ -34,18 +34,23 @@ def ask_gemini_direct(prompt):
     try:
         response = requests.post(url, headers=headers, json=data)
         
-        # Pokud je chyba, vypíšeme ji, ale nezhroutíme se
         if response.status_code != 200:
-            print(f"API Error: {response.text}")
-            return "AI momentálně nedostupná."
+            # Vypíše přesnou chybu, pokud nastane
+            return f"Error {response.status_code}: {response.text}"
             
         result = response.json()
-        return result['candidates'][0]['content']['parts'][0]['text']
+        # Bezpečné vytažení textu
+        if 'candidates' in result and result['candidates']:
+            return result['candidates'][0]['content']['parts'][0]['text']
+        else:
+            return "AI neodpověděla (prázdná data)."
+            
     except Exception as e:
         return f"Chyba komunikace: {e}"
 
 def get_gamma_data():
     print("Stahuji data z Polymarket Gamma API...")
+    # Seřadíme podle objemu, ať máme top trhy
     url = "https://gamma-api.polymarket.com/events?limit=5&active=true&closed=false&sort=volume"
     try:
         resp = requests.get(url, timeout=10)
@@ -54,8 +59,22 @@ def get_gamma_data():
         print(f"Chyba stahování: {e}")
         return []
 
+def parse_price(raw_prices):
+    # Funkce, která vytáhne cenu ať je v jakémkoliv formátu
+    try:
+        # Někdy je to list ["0.55", "0.45"], někdy string
+        if isinstance(raw_prices, str):
+            raw_prices = json.loads(raw_prices)
+        
+        if isinstance(raw_prices, list) and len(raw_prices) > 0:
+            val = float(raw_prices[0])
+            return str(round(val, 2))
+    except:
+        pass
+    return "0.50" # Fallback
+
 def main():
-    print("--- START BOTA (VERZE GEMINI-PRO) ---")
+    print("--- START BOTA (FINAL FLASH VERZE) ---")
     
     events = get_gamma_data()
     print(f"Staženo {len(events)} událostí.")
@@ -64,44 +83,37 @@ def main():
         print("Žádná data.")
         return
 
-    # Projdeme první 3 události
+    # Zpracujeme první 3 trhy
     for i, event in enumerate(events[:3]):
         try:
             title = event.get('title', 'Bez názvu')
             
-            # --- OPRAVENÉ ČTENÍ CENY ---
+            # Získání ceny
             markets = event.get('markets', [])
-            price_yes = "0.50" # Výchozí hodnota
+            price = "Neznámá"
             
             if markets:
-                main_market = markets[0]
-                raw_prices = main_market.get('outcomePrices')
-                
-                # Polymarket někdy posílá ceny jako string '["0.6", "0.4"]' a někdy jako list
-                try:
-                    if isinstance(raw_prices, str):
-                        parsed_prices = json.loads(raw_prices)
-                        price_yes = str(round(float(parsed_prices[0]), 2))
-                    elif isinstance(raw_prices, list):
-                        price_yes = str(round(float(raw_prices[0]), 2))
-                except:
-                    price_yes = "Neznámá (Odhad 0.50)"
-
-            print(f"[{i+1}] {title} (Cena: {price_yes})")
+                main_market = markets[0] # Hlavní trh události
+                price = parse_price(main_market.get('outcomePrices'))
+            
+            print(f"[{i+1}] {title} (Cena: {price})")
 
             # Analýza AI
-            prompt = (f"Jsi sázkařský analytik. Trh: '{title}'. Aktuální cena za 'ANO' je {price_yes} "
-                      f"(to znamená pravděpodobnost {float(price_yes)*100 if '0.' in price_yes else 50}%). "
-                      f"Je to dobrá příležitost? Odpověz stručně česky jednou větou.")
+            prompt = (f"Jsi zkušený trader. Trh: '{title}'. Cena za výsledek ANO je {price} "
+                      f"(tedy šance {float(price)*100}%). "
+                      f"Je to dobrá sázka? Odpověz česky, stručně, max 2 věty. Buď konkrétní.")
             
             ai_text = ask_gemini_direct(prompt)
+            
+            # Oříznutí textu, kdyby byl moc dlouhý
+            ai_text = ai_text[:400]
             print(f"   AI: {ai_text}")
 
-            # Odeslání
-            msg = f"📊 *{title}*\n💰 Cena: {price_yes}\n🧠 {ai_text}"
+            # Odeslání na Telegram
+            msg = f"🔥 *{title}*\n💵 Cena: {price}\n🤖 {ai_text}"
             send_tg(msg)
             
-            print("   Odesláno. Čekám 3s...")
+            print("   Odesláno. Pauza 3s...")
             time.sleep(3)
 
         except Exception as e:
